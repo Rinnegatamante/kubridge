@@ -123,13 +123,13 @@ LReturnFromDefaultAbortHandler:
     mcr p15, #0, r1, c5, c1, #1 
     mcr p15, #0, r1, c6, c0, #0 
     mcr p15, #0, r1, c6, c0, #2
-    sub sp, #0x15C @ 0x158 for the abort context, 0x4 for the address of the next handler
+    sub sp, #0x160 @ 0x158 for the abort context, 8 bytes for the address of the next handler and alignment
     mov r1, r0
     mov r0, sp
     mov r2, #0x158
     CopyFromUser
     cmp r0, #0
-    addne sp, #0x15C
+    addne sp, #0x160
     bne LFatalError
     mov r4, sp
     ldr r2, [r4, #0x154] @ abortType
@@ -146,7 +146,7 @@ LReturnFromDefaultAbortHandler:
     addeq lr, #0x8
     addne lr, #0x4
     add r2, #8
-    str r2, [sp, #0x158]!
+    str r2, [sp, #0x15C]!
     ldr r0, [r4, #0x144]
     ldr r1, [r4, #0x148]
     vmsr FPSCR, r0
@@ -162,10 +162,10 @@ LReturnFromDefaultAbortHandler:
     ldmia r12, {sp, lr}^
     sub r12, #0x34
     ldr r12, [r12, #0x30]
-    ldmia sp!, {pc}
+    ldr pc, [sp], #0x4
 
 LReturnToAbortHandler:
-    sub sp, #0x158 @ Save registers to stack
+    sub sp, #0x158 @ Save abort context to stack
     stmia sp, {r0 - r12}
     add r4, sp, #0x34
     stmia r4, {sp, lr}^
@@ -197,7 +197,7 @@ LReturnToAbortHandler:
     ldr r1, =defaultUserAbortHandler
     ldr r1, [r1]
     cmp r5, r1
-    beq LReturnToAbortHandler_return
+    beq LReturnToAbortHandler_return @ Process abort handler is default, Go to the next exception handler
 #if (EXCEPTION_SAFETY >= 2)
     ldr r0, [sp, #0x34]
     bl CheckStackPointer
@@ -205,7 +205,7 @@ LReturnToAbortHandler:
     bne LReturnToAbortHandler_return @ Go to next abort handler if the user stack isn't usable
 #endif
     ldr r0, [sp, #0x34]
-    sub r0, #0x160
+    sub r0, #0x158
     mov r4, r0
     mov r1, sp
     mov r2, #0x158
@@ -219,11 +219,10 @@ LReturnToAbortHandler:
     add sp, #0x158
     str r0, [sp]
     ldmia sp, {sp}^
-    add sp, #0x4
     ldr r2, =userAbortBase
     ldr r2, [r2]
-    mov r3, #0x10
-    strd r2, r3, [sp, #-0x8]!
+    mov r3, #0x10 @ CPSR value
+    strd r2, r3, [sp]
     clrex
     rfeia sp!
 LReturnToAbortHandler_return:
@@ -255,19 +254,18 @@ LReturnToAbortHandler_return:
     addeq lr, #0x8
     addne lr, #0x4
     add r2, #8
-    str r2, [sp, #0x158]
+    str r2, [sp, #0x15C]
     add r2, sp, #0x34
     ldmia r2, {sp, lr}^
     ldmia sp, {r0 - r12}
-    add sp, #0x158
+    add sp, #0x15C
     ldr pc, [sp], #0x4
 
 .global DabtExceptionHandler_lvl0
 DabtExceptionHandler_lvl0:
     .word 0x0
     .word 0x0
-    sub sp, #0x4
-    stmdb sp!, {r2, r3}
+    push {r2 - r5} @ Save r2 and r3 for later, r4 for extra space, and r5 for alignment
     mrs r2, SPSR
     and r2, #0x1F
     cmp r2, #0x10 @ User mode
@@ -279,26 +277,24 @@ DabtExceptionHandler_lvl0:
     beq LDabtExceptionHandler_lvl0_ReturnFromHandler
     mov r2, #0
     str r2, [sp, #0x8]
-    ldmia sp!, {r2, r3}
-    b LReturnToAbortHandler
+    pop {r2, r3}
+    b LReturnToAbortHandler @ Go to ReturnToAbortHandler with abortType in [sp, #0x4]
 LDabtExceptionHandler_lvl0_ReturnFromHandler:
-    add sp, #0xC
+    add sp, #0x10
     cmp r1, #0
     beq LReturnFromAbortHandler
     bne LReturnFromDefaultAbortHandler
 LDabtExceptionHandler_lvl0_continue:
     ldr r2, DabtExceptionHandler_lvl0
     add r2, #8
-    str r2, [sp, #0x8]
-    ldmia sp!, {r2, r3} @ Reload saved registers and branch to the regular lvl0 handler
-    ldmia sp!, {pc}
+    str r2, [sp, #0xC]
+    pop {r2 - r4, pc} @ Reload saved registers and branch to the regular lvl0 handler
 
 .global PabtExceptionHandler_lvl0
 PabtExceptionHandler_lvl0:
     .word 0x0
     .word 0x0
-    sub sp, #0x4
-    stmdb sp!, {r2, r3}
+    push {r2 - r5}
     mrs r2, SPSR
     and r2, #0x1F
     cmp r2, #0x10
@@ -310,6 +306,5 @@ PabtExceptionHandler_lvl0:
 LPabtExceptionHandler_lvl0_continue:
     ldr r2, PabtExceptionHandler_lvl0
     add r2, #8
-    str r2, [sp, #0x8]
-    ldmia sp!, {r2, r3} @ Reload saved registers and prepare to branch to the regular lvl0 handler
-    ldmia sp!, {pc}
+    str r2, [sp, #0xC]
+    pop {r2 - r4, pc}
